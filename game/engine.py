@@ -12,7 +12,7 @@ def new_game(name='新人',seed=None):
     rg=random.Random(seed); cs=[dict(x) for x in rows('SELECT * FROM characters')]; core=[x for x in cs if x['is_core']]; sup=[x for x in cs if not x['is_core']]; active=core+rg.sample(sup,6); sec=dict(rg.choice(rows('SELECT * FROM world_secrets')))
     ids={}
     for c in active: ids[c['role_key']]=rg.choice(rows('SELECT variant_text FROM character_identity_variants WHERE role_key=?',(c['role_key'],)))['variant_text']
-    s={'player_name':name.strip() or '新人','turn':0,'secret_key':sec['secret_key'],'secret_title':sec['title'],'secret_description':sec['description'],'active_roles':[c['role_key'] for c in active],'active_characters':{c['role_key']:c for c in active},'identities':ids,'relationships':{c['role_key']:0 for c in active},'techniques':[],'technique_use_count':{},'clues':[],'secret_progress':0,'flags':[],'used_event_ids':[],'used_families':[],'used_choice_texts':[],'recent_focus':[],'current_scene':None,'last_result':'','last_gain':'','pending_fallouts':[],'ending_bias':'','ending':None,'rng_seed':rg.randrange(1,10**9)}
+    s={'player_name':name.strip() or '新人','turn':0,'secret_key':sec['secret_key'],'secret_title':sec['title'],'secret_description':sec['description'],'active_roles':[c['role_key'] for c in active],'active_characters':{c['role_key']:c for c in active},'identities':ids,'relationships':{c['role_key']:0 for c in active},'techniques':[],'technique_use_count':{},'clues':[],'secret_progress':0,'flags':[],'used_event_ids':[],'used_families':[],'used_choice_texts':[],'recent_focus':[],'current_scene':None,'last_result':'','last_gain':'','dialogue_queue':[],'dialogue_pending':False,'pending_fallouts':[],'ending_bias':'','ending':None,'rng_seed':rg.randrange(1,10**9)}
     ensure_scene(s); return s
 def rng(s): s['rng_seed']=(s['rng_seed']*1103515245+12345)%(2**31); return random.Random(s['rng_seed'])
 def resolve_focus(s,focus):
@@ -87,8 +87,48 @@ def clue(s):
     return ''
 def finish(s):
     bias=s.get('ending_bias') or 'absurd'; q=row('SELECT title,body FROM endings WHERE secret_key=? AND ending_bias=?',(s['secret_key'],bias)); s['ending']={'title':q['title'],'body':q['body'],'secret_title':s['secret_title']}
+
+def dialogue_for(s,role_,action,sc,opt):
+    rg=rng(s)
+    c=s['active_characters'].get(role_,{})
+    npc=c.get('short_name','？？？')
+    label=opt.get('label',opt.get('option_label',''))
+    tone='comic'
+    if action in ('conflict','direct'):tone='tense'
+    elif action in ('probe','observe'):tone='suspicious'
+    elif action in ('reform','public'):tone='dry'
+
+    rs=rows(
+        'SELECT line_text FROM dialogue_lines WHERE role_key=? AND action_kind=? AND tone=? ORDER BY RANDOM() LIMIT 20',
+        (role_,action,tone)
+    ) or rows(
+        'SELECT line_text FROM dialogue_lines WHERE role_key=? AND action_kind=? ORDER BY RANDOM() LIMIT 20',
+        (role_,action)
+    ) or rows(
+        'SELECT line_text FROM dialogue_lines WHERE role_key=? ORDER BY RANDOM() LIMIT 20',
+        (role_,)
+    )
+
+    out=[{'speaker':s.get('player_name','新人'),'text':'「'+label+'」','kind':'player'}]
+    if rs:
+        picks=rg.sample(list(rs),min(2,len(rs)))
+        for x in picks:
+            out.append({'speaker':npc,'text':x['line_text'],'kind':'npc'})
+
+    if opt.get('is_technique'):
+        tn=opt.get('tech_name','這門怪功')
+        extras=[
+            f'「等一下……你剛才那個真的是《{tn}》？」',
+            f'「誰把《{tn}》教給新人的？這門東西不是應該失傳了嗎？」',
+            f'「我收回剛才的話。《{tn}》比公司制度還不合理。」',
+            f'「你用《{tn}》處理這種事？……偏偏還真的有效。」'
+        ]
+        out.append({'speaker':npc,'text':rg.choice(extras),'kind':'npc'})
+    return out[:4]
+
+
 def choose(s,opt):
-    sc=ensure_scene(s); role_=sc['focus_role']; action=opt.get('action_kind','observe'); s['last_gain']=''; label=opt.get('label',opt.get('option_label')); s['used_choice_texts'].append(label); s['relationships'][role_]=s['relationships'].get(role_,0)+int(opt.get('relationship_delta',0)); flag=opt.get('flag','');
+    sc=ensure_scene(s); role_=sc['focus_role']; action=opt.get('action_kind','observe'); s['last_gain']=''; label=opt.get('label',opt.get('option_label')); s['dialogue_queue']=dialogue_for(s,role_,action,sc,opt); s['dialogue_pending']=True; s['used_choice_texts'].append(label); s['relationships'][role_]=s['relationships'].get(role_,0)+int(opt.get('relationship_delta',0)); flag=opt.get('flag','');
     if flag and flag not in s['flags']:s['flags'].append(flag)
     cl='';
     if int(opt.get('clue_gain',0))>0:cl=clue(s)
