@@ -12,7 +12,7 @@ def new_game(name='新人',seed=None):
     rg=random.Random(seed); cs=[dict(x) for x in rows('SELECT * FROM characters')]; core=[x for x in cs if x['is_core']]; sup=[x for x in cs if not x['is_core']]; active=core+rg.sample(sup,6); sec=dict(rg.choice(rows('SELECT * FROM world_secrets')))
     ids={}
     for c in active: ids[c['role_key']]=rg.choice(rows('SELECT variant_text FROM character_identity_variants WHERE role_key=?',(c['role_key'],)))['variant_text']
-    s={'player_name':name.strip() or '新人','turn':0,'secret_key':sec['secret_key'],'secret_title':sec['title'],'secret_description':sec['description'],'active_roles':[c['role_key'] for c in active],'active_characters':{c['role_key']:c for c in active},'identities':ids,'relationships':{c['role_key']:0 for c in active},'techniques':[],'technique_use_count':{},'clues':[],'secret_progress':0,'flags':[],'used_event_ids':[],'used_families':[],'used_choice_texts':[],'recent_focus':[],'current_scene':None,'last_result':'','last_gain':'','dialogue_queue':[],'dialogue_pending':False,'pending_fallouts':[],'ending_bias':'','ending':None,'rng_seed':rg.randrange(1,10**9)}
+    s={'player_name':name.strip() or '新人','turn':0,'secret_key':sec['secret_key'],'secret_title':sec['title'],'secret_description':sec['description'],'active_roles':[c['role_key'] for c in active],'active_characters':{c['role_key']:c for c in active},'identities':ids,'relationships':{c['role_key']:0 for c in active},'techniques':[],'technique_use_count':{},'clues':[],'secret_progress':0,'flags':[],'used_event_ids':[],'used_families':[],'used_choice_texts':[],'recent_focus':[],'current_scene':None,'last_result':'','last_gain':'','dialogue_queue':[],'dialogue_pending':False,'used_dialogue_texts':[],'pending_fallouts':[],'ending_bias':'','ending':None,'rng_seed':rg.randrange(1,10**9)}
     ensure_scene(s); return s
 def rng(s): s['rng_seed']=(s['rng_seed']*1103515245+12345)%(2**31); return random.Random(s['rng_seed'])
 def resolve_focus(s,focus):
@@ -88,44 +88,75 @@ def clue(s):
 def finish(s):
     bias=s.get('ending_bias') or 'absurd'; q=row('SELECT title,body FROM endings WHERE secret_key=? AND ending_bias=?',(s['secret_key'],bias)); s['ending']={'title':q['title'],'body':q['body'],'secret_title':s['secret_title']}
 
+def _fresh_pick(s,items):
+    if not items:return ''
+    used=set(s.get('used_dialogue_texts',[]))
+    fresh=[x for x in items if x not in used]
+    pool=fresh or items
+    pick=rng(s).choice(pool)
+    s.setdefault('used_dialogue_texts',[]).append(pick)
+    if len(s['used_dialogue_texts'])>120:s['used_dialogue_texts']=s['used_dialogue_texts'][-120:]
+    return pick
+
 def dialogue_for(s,role_,action,sc,opt):
-    rg=rng(s)
-    c=s['active_characters'].get(role_,{})
-    npc=c.get('short_name','？？？')
+    npc=s['active_characters'].get(role_,{}).get('short_name','？？？')
     label=opt.get('label',opt.get('option_label',''))
-    tone='comic'
-    if action in ('conflict','direct'):tone='tense'
-    elif action in ('probe','observe'):tone='suspicious'
-    elif action in ('reform','public'):tone='dry'
-
-    rs=rows(
-        'SELECT line_text FROM dialogue_lines WHERE role_key=? AND action_kind=? AND tone=? ORDER BY RANDOM() LIMIT 20',
-        (role_,action,tone)
-    ) or rows(
-        'SELECT line_text FROM dialogue_lines WHERE role_key=? AND action_kind=? ORDER BY RANDOM() LIMIT 20',
-        (role_,action)
-    ) or rows(
-        'SELECT line_text FROM dialogue_lines WHERE role_key=? ORDER BY RANDOM() LIMIT 20',
-        (role_,)
-    )
-
     out=[{'speaker':s.get('player_name','新人'),'text':'「'+label+'」','kind':'player'}]
-    if rs:
-        picks=rg.sample(list(rs),min(2,len(rs)))
-        for x in picks:
-            out.append({'speaker':npc,'text':x['line_text'],'kind':'npc'})
 
+    # Exact event context for database choices.
+    hook=''
+    choice_id=opt.get('id')
+    if isinstance(choice_id,int) and not opt.get('is_technique'):
+        meta=row('SELECT hook,consequence FROM choice_dialogue_meta WHERE choice_id=?',(choice_id,))
+        if meta:
+            hook=meta['hook']
+            verbs={
+                'probe':'追問','direct':'直接碰','observe':'盯著看',
+                'public':'公開','reform':'改掉','conflict':'硬闖',
+                'learn':'試著理解','technique':'拿功法處理'
+            }
+            verb=verbs.get(action,'處理')
+            tmpls=[x['template_text'] for x in rows(
+                'SELECT template_text FROM role_response_templates WHERE role_key=? ORDER BY RANDOM() LIMIT 20',
+                (role_,)
+            )]
+            tmpl=_fresh_pick(s,tmpls)
+            if tmpl:
+                rendered=tmpl.format(verb=verb,hook=hook)
+                out.append({'speaker':npc,'text':rendered,'kind':'npc'})
+            out.append({'speaker':'旁白','text':meta['consequence'],'kind':'narration'})
+
+    # Technique options get a role-specific comment about the exact technique.
     if opt.get('is_technique'):
-        tn=opt.get('tech_name','這門怪功')
-        extras=[
-            f'「等一下……你剛才那個真的是《{tn}》？」',
-            f'「誰把《{tn}》教給新人的？這門東西不是應該失傳了嗎？」',
-            f'「我收回剛才的話。《{tn}》比公司制度還不合理。」',
-            f'「你用《{tn}》處理這種事？……偏偏還真的有效。」'
-        ]
-        out.append({'speaker':npc,'text':rg.choice(extras),'kind':'npc'})
-    return out[:4]
+        tech=opt.get('tech_name','這門怪功')
+        tmpls=[x['template_text'] for x in rows(
+            'SELECT template_text FROM technique_role_templates_v2 WHERE role_key=? ORDER BY RANDOM() LIMIT 20',
+            (role_,)
+        )]
+        tmpl=_fresh_pick(s,tmpls)
+        if tmpl:
+            out.append({'speaker':npc,'text':tmpl.format(tech=tech),'kind':'npc'})
 
+    # Special/fallout choices may not have a database choice id.
+    if len(out)==1:
+        specials=[
+            '「你這個選法，會讓事情更麻煩。好消息是，也可能更有趣。」',
+            '「我本來以為你會選安全的那條。看來我還不夠了解你。」',
+            '「好。既然你決定這樣做，我就當今天沒有正常下班這回事。」',
+            '「這不是我最推薦的答案，但確實是最像你的答案。」'
+        ]
+        out.append({'speaker':npc,'text':_fresh_pick(s,specials),'kind':'npc'})
+
+    # One extra line in the character's own voice, fresh within the run.
+    if len(out)<4:
+        voice=[x['voice_line'] for x in rows(
+            'SELECT voice_line FROM role_voice_lines_v2 WHERE role_key=? ORDER BY RANDOM() LIMIT 30',
+            (role_,)
+        )]
+        v=_fresh_pick(s,voice)
+        if v:out.append({'speaker':npc,'text':v,'kind':'npc'})
+
+    return out[:4]
 
 def choose(s,opt):
     sc=ensure_scene(s); role_=sc['focus_role']; action=opt.get('action_kind','observe'); s['last_gain']=''; label=opt.get('label',opt.get('option_label')); s['dialogue_queue']=dialogue_for(s,role_,action,sc,opt); s['dialogue_pending']=True; s['used_choice_texts'].append(label); s['relationships'][role_]=s['relationships'].get(role_,0)+int(opt.get('relationship_delta',0)); flag=opt.get('flag','');
@@ -138,9 +169,9 @@ def choose(s,opt):
     else:
         force=s['turn']>=2 and not s['techniques'];
         if force or rng(s).random()<float(opt.get('learn_chance',0)):learn(s,opt.get('learn_tag',''),force=force)
-    parts=[opt['outcome_text'],reaction(s,role_,sc['act'],action)]
+    parts=[opt['outcome_text']]
     if cl:parts.append('🔎 新線索：'+cl)
-    parts.append(ambient(s,sc['act'],sc['category'],action)); s['last_result']='\n\n'.join(x for x in parts if x); eb=opt.get('ending_bias','');
+    s['last_result']='\n\n'.join(x for x in parts if x); eb=opt.get('ending_bias','');
     if eb:s['ending_bias']=eb
     s['turn']+=1; s['current_scene']=None
     if s['turn']>=TOTAL_TURNS:finish(s)
