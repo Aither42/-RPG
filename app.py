@@ -272,7 +272,7 @@ def render_dialogue(lines: list[dict]) -> None:
 
 
 if "game" not in st.session_state:
-    render_brand("手機短篇互動小說｜18 個主要決策｜約 20～30 分鐘")
+    render_brand("手機短篇互動小說｜15 個主要決策｜約 15～25 分鐘")
     st.markdown("---")
     st.write(
         "你只是來報到的新人。直到你發現 HR 的員工守則提到門規、"
@@ -338,9 +338,16 @@ with c2:
         if not techniques:
             st.caption("還沒有功法。它們會從某些對話選項與事件中突然出現。")
         for technique in techniques:
+            status = f"已使用 {technique.get('use_count', 0)} 次"
+            if technique.get("countered"):
+                status += "｜⚠️ NPC 已研究反制"
             st.markdown(
-                f"**《{technique['name']}》**  \n{technique['description']}"
+                f"**《{technique['name']}》**  \n"
+                f"{technique['description']}  \n"
+                f"_{status}_"
             )
+            if technique.get("persistent_effect"):
+                st.caption("餘波：" + technique["persistent_effect"])
 
 with c3:
     with st.popover("🔎 線索", use_container_width=True):
