@@ -1,21 +1,51 @@
 
-from game.engine import new_game,ensure_scene,options_for_scene,choose
-s=new_game("功法測試",7)
-s["techniques"]=["seen_silence","excel_sword","ppt_dragon","meeting_soul","coat_clone"]
-used=False; ripple=False; follow=False; combo=False; n=0
-while not s.get("ending"):
- sc=ensure_scene(s)
- if "【功法餘波" in sc.get("extra_line",""):ripple=True
- if sc["family"].startswith(("tech_consequence_","combo_consequence_")):follow=True
- opts=options_for_scene(s); assert opts
- pick=next((o for o in opts if o.get("is_combo")),None)
- if pick: combo=True
- if pick is None: pick=next((o for o in opts if o.get("is_technique")),None)
- if pick and pick.get("is_technique"): used=True
- if pick is None:pick=opts[0]
- choose(s,pick); s["dialogue_pending"]=False; n+=1; assert n<=20
-assert s["turn"]==15 and s["ending"]
-assert used or combo
-assert s["technique_use_count"] or s["used_combos"]
-assert ripple or follow or s["used_combos"]
-print("V4.6 technique impact test passed",used,combo,ripple,follow)
+from game.engine import new_game, ensure_scene, options_for_scene, choose
+
+state = new_game("功法測試", 7)
+state["techniques"] = [
+    "seen_silence", "excel_sword", "ppt_dragon",
+    "meeting_soul", "coat_clone",
+]
+
+used_technique = False
+used_combo = False
+seen_ripple = False
+seen_followup = False
+count = 0
+
+while not state.get("ending"):
+    scene = ensure_scene(state)
+
+    if "【功法餘波" in scene.get("extra_line", ""):
+        seen_ripple = True
+    if scene["family"].startswith(("tech_consequence_", "combo_consequence_")):
+        seen_followup = True
+
+    options = options_for_scene(state)
+    pick = next((x for x in options if x.get("is_combo")), None)
+    if pick:
+        used_combo = True
+
+    if pick is None:
+        pick = next((x for x in options if x.get("is_technique")), None)
+        if pick:
+            used_technique = True
+
+    if pick is None:
+        pick = options[0]
+
+    choose(state, pick)
+    state["dialogue_pending"] = False
+    count += 1
+    assert count <= 20
+
+assert state["turn"] == 15
+assert state["ending"]
+assert used_technique or used_combo
+assert state["technique_use_count"] or state["used_combos"]
+assert seen_ripple or seen_followup or state["used_combos"]
+
+print(
+    "V4.7 technique impact test passed:",
+    used_technique, used_combo, seen_ripple, seen_followup,
+)
